@@ -1,8 +1,6 @@
 import re
 from collections import defaultdict
-
-import requests
-from bs4 import BeautifulSoup
+from comc import Comc
 
 class Checklist(object):
     def __init__(self, path):
@@ -10,10 +8,18 @@ class Checklist(object):
         self.sport = None
         self.product = None
         self.year = None
-        self.codes = {}
+
+        # key is set, value is list of cards and quantities, etc.
         self.checklists = defaultdict(dict)
-        self.comc_cache = {}
+
+        # cached utility for fetching data on comc.
+        self.comc = Comc()
         self.parse()
+
+    def fetch_set_data(self, set):
+        if set not in self.checklists:
+            raise Exception("Invalid set name")
+        return self.comc.fetch_set_data(self.sport, self.year, self.product, set)
 
     def parse(self):
         insert = "base"
@@ -61,40 +67,7 @@ class Checklist(object):
                     'price': None
                 }
 
-    def get_card_info_from_comc(self, set):
-        if set in self.comc_cache:
-            return self.comc_cache[set]
 
-        url = self.get_comc_url(set)
-
-        print "fetching from comc..."
-        doc = requests.get(url)
-        print "...done"
-        parsed = BeautifulSoup(doc.content, "html.parser")
-
-        infos = parsed.find_all(class_="cardInfoWrapper")
-
-        datas = {}
-        for card in infos:
-            number = card.find(class_="description").text.strip().split("#")[-1]
-            datas[number] = {
-                'price': card.find(class_="listprice").find('a').text,
-                'player_name': card.find(class_="title").text.strip(),
-            }
-
-        self.comc_cache[set] = datas
-        return datas
-
-    def get_comc_url(self, set):
-        if set not in self.checklists:
-            raise Exception("Invalid Code")
-
-        return "https://www.comc.com/Cards/{sport}/{year}/{product}_-_{set},i100".format(
-            sport=self.sport,
-            year=self.year,
-            product=self.product,
-            set=set
-        )
 
     def get_total_size_of_set(self, set):
         return len(self.checklists[set])
@@ -113,23 +86,86 @@ class Checklist(object):
                 cards[number] = data
 
         if with_price:
-            info = self.get_card_info_from_comc(set)
+            info = self.fetch_set_data(set)
             for num, data in cards.items():
                 data['price'] = info[num]['price'] if num in info else None
 
         return cards
 
     def average_card_price(self, set):
-        info = self.get_card_info_from_comc(set)
+        info = self.fetch_set_data(set)
         total_cost = 0
         total_hits = 0
         for card in info.values():
             p = card['price']
             if p:
-                total_cost += float(p[1:])
+                total_cost += p
                 total_hits += 1
         return total_cost / total_hits
 
+    def percentage_filled(self, set, verbose=False):
+        total = self.get_total_size_of_set(set)
+        haves = len(self.get_have_list(set))
+        if verbose: print "You have %d out of %d" % (haves, total)
+        return haves / float(total)
+
+    def percentage_missing(self, set, verbose=False):
+        total = self.get_total_size_of_set(set)
+        wants = len(self.get_want_list(set))
+        if verbose: print "You are missing %d out of %d" % (wants, total)
+        return wants / float(total)
+
+    def wants_comc_unlisted(self, set):
+        wants = self.get_want_list(set, True)
+        wnloc = [x for x in wants.values() if not x['price']]
+
+    def haves_comc_unlisted(self, set):
+        haves = self.get_have_list(set, True)
+        hnloc = [x for x in haves.values() if not x['price']]
+
+    def comc_report(self, set, verbose=True):
+        wants = self.get_want_list(set, True)
+        haves = self.get_have_list(set, True)
+
+        wloc = [x for x in wants.values() if x['price']]
+        wnloc = [x for x in wants.values() if not x['price']]
+
+        hloc = [x for x in haves.values() if x['price']]
+        hnloc = [x for x in haves.values() if not x['price']]
+
+        average_list_price = (
+            sum(x['price'] for x in wloc + hloc) / len(wloc + hloc)
+        )
+
+        cost_to_buyout = sum(x['price'] for x in wloc)
+        value_from_sellout =  sum(x['price'] * x['quantity'] for x in hloc)
+
+        ret = {
+            "wants_listed_on_comc": len(wloc),
+            "wants_not_listed_on_comc": len(wnloc),
+            "haves_listed_on_comc": len(hloc),
+            "haves_not_listed_on_comc": len(hnloc),
+            "cost_to_buyout": cost_to_buyout,
+            "value_from_sellout": value_from_sellout,
+            "average_list_price": average_list_price,
+
+            "estimated_value": sum(
+                x['quantity'] * average_list_price for x in hnloc
+            ) + value_from_sellout,
+
+            "estimated_cost_to_complete": (average_list_price * len(wnloc)) + cost_to_buyout
+        }
+
+        if verbose:
+            print "Estimated value of your collection: $%.2f (%.1f%% unlisted)" % (
+                ret['estimated_value'], 100.0 * len(hnloc) / len(hloc)
+            )
+            print "Estimated cost to complete: $%.2f (%.1f%% unlisted)" % (
+                ret['estimated_cost_to_complete'], 100.0 * len(wnloc) / len(wloc)
+            )
+            print "Estimation based on: $%.2f per card." % average_list_price
+
+        return ret
 
     def show_want_list(self, set, with_price=False):
         cards = self.get_want_list(set, with_price)
@@ -144,38 +180,37 @@ class Checklist(object):
             type.title(), self.year, self.product, set.replace("_", ' ')
         )
 
-        total = self.get_total_size_of_set(set)
-        total_in = len(cards)
-        total_out = total - total_in
-        total_price = 0
-        total_on_comc = 0
+        # sorted by card number
+        sorted_cards = sorted(cards.items(), key=lambda x: x[0])
 
-        for num, card in sorted(cards.items(), key=lambda x: x[0]):
-            price = card['price']
-            if price:
-                total_on_comc += 1
-                total_price += float(price[1:])
+        for num, card in sorted_cards:
+            if not with_price:
+                print "%s %s %s" % (
+                    num.ljust(4), card['player_name']
+                )
+            else:
+                p = ("$%.2f" % card['price']) if card['price'] else ''
+                print "%s %s %s" % (
+                    num.ljust(4),
+                    p.ljust(5),
+                    card['player_name']
+                )
 
-            print "%s %s %s" % (
-                num.ljust(4), (price or '').ljust(5), card['player_name']
-            )
+        total_in_set = self.get_total_size_of_set(set)
 
-        if type == 'want':
-            tag = 'are missing'
-            final = "Cost to get to %.1f%% complete: $%.2f"
-            after_comc = (total_out + total_on_comc) * 100 / float(total)
-        else:
-            tag = "have"
-            final = "You can sell your entire %scollection for $%.2f"
-            after_comc = ''
-
-        print "You %s %s out of %s (%.1f%%)" % (
-            tag, total_in, total, total_in * 100 / float(total)
+        print "You %s %d cards out of %d in the set" % (
+            "need" if type == 'want' else "have",
+            len(cards), total_in_set
+        )
+        remaining = total_in_set - len(cards)
+        print "You %s %d cards (%.1f%%)" % (
+             "have" if type == 'want' else "need",
+            remaining, 100 * remaining / float(total_in_set)
         )
 
         if with_price:
-            print "Total cards on Comc: %s" % total_on_comc
-            print final % (after_comc, total_price)
+            self.comc_report(set, verbose=True)
+
 
     def show_intersections(self, set, card_numbers, with_price=False):
         total = len(card_numbers)
@@ -216,24 +251,4 @@ class Checklist(object):
                 need_count - needs_on_comc
             )
         print "Dupe rate: %.2f%%," % (100 * float(have_count) / total),
-        print "Fill rate: %.2f%%" % (100 * float(need_count) / total),
-
-c = Checklist("/Users/chrispriest/BaseballCards/Panini Cooperstown/2013.txt")
-#c.show_want_list("Base", True)
-#c.show_intersections("Base_-_Crystal_Collection", [
-#    4,7,9,11,17,22,31,34,42,43,46,50,51,52,57,61,65,70,71,76,77,80,87,90,94,97,100,
-#    106, 109,118,119,120,122,123,125,127,135,137,145,150,159,199
-
-#    4, 9, 11, 13, 14, 19, 20, 26, 28, 32, 33, 36, 41, 42, 47, 50, 54, 56, 58, 59,
-#    60, 62, 65, 66, 67, 69, 70, 77, 80, 81, 82, 86, 88, 92, 98, 100, 102, 104,
-#    106, 107, 113, 115, 117, 119, 121, 126, 127, 129, 130, 133, 136, 137, 138,
-#    141, 142, 143, 144, 145, 148
-
-#], with_price=True)
-
-
-print c.show_want_list("Base_-_Green_Crystal_Shard", with_price=False)
-
-#print c.average_card_price("Base_-_Crystal_Collection")
-#print c.get_comc_url("X")
-#print c.get_comc_url("Y")
+        print "Fill rate: %.2f%%" % (100 * float(need_count) / total)
