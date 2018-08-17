@@ -269,12 +269,15 @@ class Checklist(object):
             counts['+ Need'], counts["- Have"], total
         ))
         if with_price:
+            haves_unlisted = counts['- Have'] - on_comc['- Have']
+            needs_unlisted = counts["+ Need"] - on_comc['+ Need']
             avg = (total_price["- Have"] + total_price["+ Need"]) / (counts['- Have'] + counts['+ Need'])
-            estimated_haves = total_price["- Have"] + (counts['- Have'] - on_comc['- Have']) * avg
-            estimated_needs = total_price["+ Need"] + (counts["+ Need"] - on_comc['+ Need']) * avg
+            estimated_haves = total_price["- Have"] + (haves_unlisted) * avg
+            estimated_needs = total_price["+ Need"] + (needs_unlisted) * avg
             print ("Value of haves: $%.2f (%d unlisted), Value of needs: $%.2f (%d unlisted)" % (
-                estimated_haves, counts['- Have'] - on_comc["- Have"],
-                estimated_needs, counts["+ Need"] - on_comc['+ Need']
+                estimated_haves, haves_unlisted,
+                estimated_needs, needs_unlisted
             ))
+            print("Total value of lot: $%.2f" % (estimated_needs + estimated_haves))
         print("Dupe rate: %.2f%%," % (100 * float(counts['- Have']) / total))
         print("Fill rate: %.2f%%" % (100 * float(counts['+ Need']) / total))
