@@ -1,6 +1,7 @@
 import re
 from collections import defaultdict
 from comc import Comc
+from natsort import natsorted
 
 class Checklist(object):
     def __init__(self, path):
@@ -9,12 +10,13 @@ class Checklist(object):
         self.product = None
         self.year = None
 
+        self.subsets = []
+
         # key is set, value is list of cards and quantities, etc.
-        self.checklists = defaultdict(dict)
+        self.checklists = self.parse()
 
         # cached utility for fetching data on comc.
         self.comc = Comc()
-        self.parse()
 
     def fetch_set_data(self, set):
         if set not in self.checklists:
@@ -22,50 +24,53 @@ class Checklist(object):
         return self.comc.fetch_set_data(self.sport, self.year, self.product, set)
 
     def parse(self):
-        insert = "base"
-        code_definitions = {'X': {'name': "Base", 'color': 'black'}}
+        checklists = defaultdict(dict)
+        current_subset = {}
         for line in self.file.readlines():
             if not line.strip():
-                continue
+                continue # skip blank lines
 
             # special line defining special attributes
             if line.startswith("#"):
-                if line.startswith("#product: "):
+                if line.startswith("# product: "):
                     self.product = line[10:].strip()
-                elif line.startswith("#year: "):
+                elif line.startswith("# year: "):
                     self.year = int(line[7:])
-                elif line.startswith("#sport: "):
+                elif line.startswith("# sport: "):
                     self.sport = line[8:].strip()
                 elif '=' in line:
                     code, args_ = line[1:].split("=")
 
                     argz = args_.strip().split(" ")
                     color = 'black' if len(argz) <= 1 else argz[1]
+                    name = argz[0].strip()
 
-                    code_definitions[code.strip()] = {
-                        'name': argz[0].strip(),
+                    current_subset[name] = {
+                        'code': code.strip(),
                         'color': color
                     }
-
-                elif line.startswith("#insert: "):
-                    insert = line[9:].strip()
-                    code_definitions = {'X': {'name': insert}}
+                    self.subsets += current_subset
                 continue
 
-            # normal line with player and codes
-            number, codes, name = line.split("|")
+            if not current_subset: # allow first base definition to be implicit
+                current_subset = {'Base': {'code': "X", 'color': 'black'}}
+                self.subsets += current_subset
 
-            for code in code_definitions.keys():
+            # normal line with player and codes
+            number, codes, player_name = line.split("|")
+
+            for set_name, data in current_subset.items():
                 quantity = 1
-                if code not in codes:
+                if data['code'] not in codes:
                     quantity = 0
 
-                set_name = code_definitions[code]['name']
-                self.checklists[set_name][number.strip()] = {
-                    'player_name': name.strip(),
+                checklists[set_name][number.strip()] = {
+                    'player_name': player_name.strip(),
                     'quantity': quantity,
-                    'price': None
+                    'price': None # will get filled in later
                 }
+
+        return checklists
 
 
 
@@ -117,7 +122,7 @@ class Checklist(object):
 
     def wants_comc_unlisted(self, set):
         wants = self.get_want_list(set, True)
-        wnloc = [x for x in wants.values() if not x['price']]
+        return [x for x in wants.values() if not x['price']]
 
     def haves_comc_unlisted(self, set):
         haves = self.get_have_list(set, True)
@@ -157,9 +162,11 @@ class Checklist(object):
         }
 
         if verbose:
-            print "Estimated value of your collection: $%.2f (%.1f%% unlisted)" % (
-                ret['estimated_value'], 100.0 * len(hnloc) / len(hloc)
-            )
+            if len(haves):
+                unlisted = "(%.1f%% unlisted)" % (100.0 * len(hnloc) / len(hloc))
+                print "Estimated value of your collection: $%.2f %s" % (
+                    ret['estimated_value'], unlisted
+                )
             print "Estimated cost to complete: $%.2f (%.1f%% unlisted)" % (
                 ret['estimated_cost_to_complete'], 100.0 * len(wnloc) / len(wloc)
             )
@@ -177,15 +184,16 @@ class Checklist(object):
 
     def _show(self, type, set, cards, with_price=False):
         print "%s list for: %s %s %s" % (
-            type.title(), self.year, self.product, set.replace("_", ' ')
+            type.title(), self.year, self.product.replace("_", ' '),
+            set.replace("_", ' ')
         )
 
         # sorted by card number
-        sorted_cards = sorted(cards.items(), key=lambda x: x[0])
+        sorted_cards = natsorted(cards.items(), key=lambda x: x[0])
 
         for num, card in sorted_cards:
             if not with_price:
-                print "%s %s %s" % (
+                print "%s %s" % (
                     num.ljust(4), card['player_name']
                 )
             else:
@@ -214,7 +222,7 @@ class Checklist(object):
 
     def show_intersections(self, set, card_numbers, with_price=False):
         total = len(card_numbers)
-        wants = self.get_want_list(set, with_price)
+        needs = self.get_want_list(set, with_price)
         haves = self.get_have_list(set, with_price)
 
         have_count = 0
@@ -224,31 +232,38 @@ class Checklist(object):
         total_need_price = 0
         needs_on_comc = 0
 
+        counts = {'+ Need': 0, '- Have': 0}
+        total_price = {'+ Need': 0, '- Have': 0}
+        on_comc = {'+ Need': 0, '- Have': 0}
+
         for card in card_numbers:
             c = str(card)
-            if c in wants:
-                need_count += 1
+            if c in needs:
+                tag = "+ Need"
                 p = wants[c]['price']
-                if p:
-                    total_need_price += float(p[1:])
-                    needs_on_comc += 1
-                print "+ Need", c.ljust(3), (p or '').ljust(6), wants[c]['player_name']
             elif c in haves:
-                have_count += 1
+                tag = "- Have"
                 p = haves[c]['price']
-                if p:
-                    total_have_price += float(p[1:])
-                    haves_on_comc += 1
-                print "- Have", c.ljust(3), (p or '').ljust(6), haves[c]['player_name']
+
+            counts[tag] += 1
+
+            if p:
+                total_price[tag] += float(p)
+                on_comc[tag] += 1
+
+            print (tag, c.ljust(3),
+                (("$.2f" % p) if p else '').ljust(6),
+                haves[c]['player_name']
+            )
 
         print "======"
         print "You need %d, and you have %d out of a total of %d cards." % (
-            need_count, have_count, total
+            counts['+ Need'], counts["- Have"], total
         )
         if with_price:
             print "Value of haves: $%.2f (%d missing), Value of needs: $%.2f (%d missing)" % (
-                total_have_price, total_need_price, have_count - haves_on_comc,
-                need_count - needs_on_comc
+                total_price["- Have"], count['- Have'] - on_comc["- Have"],
+                total_price["+ Need"], count["+ Need"] - on_comc['+ Need']
             )
-        print "Dupe rate: %.2f%%," % (100 * float(have_count) / total),
-        print "Fill rate: %.2f%%" % (100 * float(need_count) / total)
+        print "Dupe rate: %.2f%%," % (100 * float(count['- Have']) / total),
+        print "Fill rate: %.2f%%" % (100 * float(count['+ Need']) / total)
