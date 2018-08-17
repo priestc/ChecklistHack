@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import re
 from collections import defaultdict
 from comc import Comc
@@ -111,13 +113,13 @@ class Checklist(object):
     def percentage_filled(self, set, verbose=False):
         total = self.get_total_size_of_set(set)
         haves = len(self.get_have_list(set))
-        if verbose: print "You have %d out of %d" % (haves, total)
+        if verbose: print("You have %d out of %d" % (haves, total))
         return haves / float(total)
 
     def percentage_missing(self, set, verbose=False):
         total = self.get_total_size_of_set(set)
         wants = len(self.get_want_list(set))
-        if verbose: print "You are missing %d out of %d" % (wants, total)
+        if verbose: print("You are missing %d out of %d" % (wants, total))
         return wants / float(total)
 
     def wants_comc_unlisted(self, set):
@@ -164,13 +166,13 @@ class Checklist(object):
         if verbose:
             if len(haves):
                 unlisted = "(%.1f%% unlisted)" % (100.0 * len(hnloc) / len(hloc))
-                print "Estimated value of your collection: $%.2f %s" % (
+                print("Estimated value of your collection: $%.2f %s" % (
                     ret['estimated_value'], unlisted
-                )
-            print "Estimated cost to complete: $%.2f (%.1f%% unlisted)" % (
+                ))
+            print("Estimated cost to complete: $%.2f (%.1f%% unlisted)" % (
                 ret['estimated_cost_to_complete'], 100.0 * len(wnloc) / len(wloc)
-            )
-            print "Estimation based on: $%.2f per card." % average_list_price
+            ))
+            print("Estimation based on: $%.2f per card." % average_list_price)
 
         return ret
 
@@ -183,38 +185,38 @@ class Checklist(object):
         return self._show('have', set, cards, with_price)
 
     def _show(self, type, set, cards, with_price=False):
-        print "%s list for: %s %s %s" % (
+        print("%s list for: %s %s %s" % (
             type.title(), self.year, self.product.replace("_", ' '),
             set.replace("_", ' ')
-        )
+        ))
 
         # sorted by card number
         sorted_cards = natsorted(cards.items(), key=lambda x: x[0])
 
         for num, card in sorted_cards:
             if not with_price:
-                print "%s %s" % (
+                print("%s %s" % (
                     num.ljust(4), card['player_name']
-                )
+                ))
             else:
                 p = ("$%.2f" % card['price']) if card['price'] else ''
-                print "%s %s %s" % (
+                print("%s %s %s" % (
                     num.ljust(4),
                     p.ljust(5),
                     card['player_name']
-                )
+                ))
 
         total_in_set = self.get_total_size_of_set(set)
 
-        print "You %s %d cards out of %d in the set" % (
+        print("You %s %d cards out of %d in the set" % (
             "need" if type == 'want' else "have",
             len(cards), total_in_set
-        )
+        ))
         remaining = total_in_set - len(cards)
-        print "You %s %d cards (%.1f%%)" % (
+        print("You %s %d cards (%.1f%%)" % (
              "have" if type == 'want' else "need",
             remaining, 100 * remaining / float(total_in_set)
-        )
+        ))
 
         if with_price:
             self.comc_report(set, verbose=True)
@@ -232,38 +234,47 @@ class Checklist(object):
         total_need_price = 0
         needs_on_comc = 0
 
-        counts = {'+ Need': 0, '- Have': 0}
-        total_price = {'+ Need': 0, '- Have': 0}
-        on_comc = {'+ Need': 0, '- Have': 0}
+        counts = {'+ Need': 0, '- Have': 0, None: 0}
+        total_price = {'+ Need': 0, '- Have': 0, None: 0}
+        on_comc = {'+ Need': 0, '- Have': 0, None: 0}
 
         for card in card_numbers:
             c = str(card)
+
             if c in needs:
                 tag = "+ Need"
-                p = wants[c]['price']
+                card = needs[c]
             elif c in haves:
                 tag = "- Have"
-                p = haves[c]['price']
+                card = haves[c]
+            else:
+                print("Neither want nor need:", c)
+                continue
 
+            p = card['price']
             counts[tag] += 1
 
-            if p:
-                total_price[tag] += float(p)
+            if not p:
                 on_comc[tag] += 1
+            else:
+                total_price[tag] += p
 
             print (tag, c.ljust(3),
-                (("$.2f" % p) if p else '').ljust(6),
-                haves[c]['player_name']
+                (("$%.2f" % p) if p else '').ljust(6),
+                card['player_name']
             )
 
-        print "======"
-        print "You need %d, and you have %d out of a total of %d cards." % (
+        print ("======")
+        print("You need %d, and you have %d out of a total of %d cards." % (
             counts['+ Need'], counts["- Have"], total
-        )
+        ))
         if with_price:
-            print "Value of haves: $%.2f (%d missing), Value of needs: $%.2f (%d missing)" % (
-                total_price["- Have"], count['- Have'] - on_comc["- Have"],
-                total_price["+ Need"], count["+ Need"] - on_comc['+ Need']
-            )
-        print "Dupe rate: %.2f%%," % (100 * float(count['- Have']) / total),
-        print "Fill rate: %.2f%%" % (100 * float(count['+ Need']) / total)
+            avg = (total_price["- Have"] + total_price["+ Need"]) / (counts['- Have'] + counts['+ Need'])
+            estimated_haves = total_price["- Have"] + (counts['- Have'] - on_comc['- Have']) * avg
+            estimated_needs = total_price["+ Need"] + (counts["+ Need"] - on_comc['+ Need']) * avg
+            print ("Value of haves: $%.2f (%d unlisted), Value of needs: $%.2f (%d unlisted)" % (
+                estimated_haves, counts['- Have'] - on_comc["- Have"],
+                estimated_needs, counts["+ Need"] - on_comc['+ Need']
+            ))
+        print("Dupe rate: %.2f%%," % (100 * float(counts['- Have']) / total))
+        print("Fill rate: %.2f%%" % (100 * float(counts['+ Need']) / total))
