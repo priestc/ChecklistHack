@@ -1,0 +1,37 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+import argparse
+
+from checklist_parser import Checklist
+
+parser = argparse.ArgumentParser() #version='1.0.2')
+
+subparsers = parser.add_subparsers(help='commands', dest="subparser_name")
+
+x = subparsers.add_parser('list_sets', help='List all subsets within checklist')
+x.add_argument('path', action='store', help='Path to checklist file')
+
+x = subparsers.add_parser('wantlist', help='List all cards not yet owned in checklist')
+x.add_argument('path', action='store', help='Path to checklist file')
+x.add_argument('set', action='store', help='Set')
+x.add_argument('--with-price', action='store_true', help='Include Comc price data')
+
+x = subparsers.add_parser('havelist', help='List all cards already owned in checklist')
+x.add_argument('path', action='store', help='Path to checklist file')
+x.add_argument('set', action='store', help='Set')
+x.add_argument('--with-price', action='store_true', help='Include Comc price data')
+
+argz = parser.parse_args()
+
+if argz.subparser_name == "wantlist":
+    c =  Checklist(argz.path)
+    c.show_want_list(argz.set, with_price=argz.with_price)
+
+if argz.subparser_name == "havelist":
+    c =  Checklist(argz.path)
+    c.show_have_list(argz.set, with_price=argz.with_price)
+
+if argz.subparser_name == "list_sets":
+    c =  Checklist(argz.path)
+    print(c.checklists.keys())

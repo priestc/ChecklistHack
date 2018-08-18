@@ -12,7 +12,7 @@ class Checklist(object):
         self.product = None
         self.year = None
 
-        self.subsets = []
+        self.subsets = {}
 
         # key is set, value is list of cards and quantities, etc.
         self.checklists = self.parse()
@@ -23,18 +23,23 @@ class Checklist(object):
     def fetch_set_data(self, set):
         if set not in self.checklists:
             raise Exception("Invalid set name")
-        return self.comc.fetch_set_data(self.sport, self.year, self.product, set)
+        #import debug
+        comc_set = self.subsets[set]['comc_name']
+        return self.comc.fetch_set_data(self.sport, self.year, self.product, comc_set)
 
     def parse(self):
         checklists = defaultdict(dict)
         current_subset = {}
+        previous_line = None
         for line in self.file.readlines():
             if not line.strip():
                 continue # skip blank lines
 
             # special line defining special attributes
             if line.startswith("#"):
-                if line.startswith("# product: "):
+                if line.startswith("##"):
+                    continue
+                elif line.startswith("# product: "):
                     self.product = line[10:].strip()
                 elif line.startswith("# year: "):
                     self.year = int(line[7:])
@@ -43,24 +48,33 @@ class Checklist(object):
                 elif '=' in line:
                     code, args_ = line[1:].split("=")
 
-                    argz = args_.strip().split(" ")
-                    color = 'black' if len(argz) <= 1 else argz[1]
-                    name = argz[0].strip()
+                    if previous_line != "definition" and previous_line != None:
+                        # new definition, new subset, save the old one
+                        for common_name, data in current_subset.items():
+                            self.subsets[common_name] = data
+                        current_subset = {}
 
-                    current_subset[name] = {
+                    argz = args_.strip().split(" ")
+                    comc_name = argz[0].strip()
+                    common_name = comc_name.lower() if len(argz) <= 1 else argz[1]
+                    color = 'black' if len(argz) <= 2 else argz[2]
+
+                    current_subset[common_name] = {
                         'code': code.strip(),
-                        'color': color
+                        'color': color,
+                        'comc_name': comc_name,
                     }
-                    self.subsets += current_subset
+
+                previous_line = "definition"
                 continue
 
             if not current_subset: # allow first base definition to be implicit
                 current_subset = {'Base': {'code': "X", 'color': 'black'}}
-                self.subsets += current_subset
 
             # normal line with player and codes
             number, codes, player_name = line.split("|")
 
+            #print (line, codes)
             for set_name, data in current_subset.items():
                 quantity = 1
                 if data['code'] not in codes:
@@ -71,6 +85,7 @@ class Checklist(object):
                     'quantity': quantity,
                     'price': None # will get filled in later
                 }
+            previous_line = "normal"
 
         return checklists
 
